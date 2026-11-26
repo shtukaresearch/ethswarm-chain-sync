@@ -48,14 +48,18 @@ The store is a cache. Deleting a contract's directory makes the next sync rebuil
 ## Usage
 
 ```
-ethswarm-chain-sync sync                                   # all non-token contracts, mainnet
+ethswarm-chain-sync sync                                   # latest release's contracts, mainnet
+ethswarm-chain-sync sync -c v0.6.0                         # every contract in release v0.6.0
+ethswarm-chain-sync sync -c all                            # every deployment of every release
 ethswarm-chain-sync sync -c PostageStamp -e BatchCreated   # one event, every PostageStamp deployment
-ethswarm-chain-sync sync -c Redistribution@v0.9.4          # one deployment
+ethswarm-chain-sync sync -c Redistribution@v0.9.4          # one contract as of one release
 ethswarm-chain-sync sync -n testnet -c 0x...               # by address, on Sepolia
 ethswarm-chain-sync status -c StakeRegistry                # checkpoints, no RPC
 ```
 
-The RPC endpoint is `--rpc-url`, else `$GNO_RPC_URL` (mainnet) or `$SEP_RPC_URL` (testnet). `Token`/`TestToken` are only synced when named with `-c`.
+Contract selectors (`-c`, repeatable) are `latest` (the default), a release `vX.Y.Z`, `all`, a contract `Name`, `Name@vX.Y.Z` or `Name@latest`, or an address. A release selects the contracts in that release's manifest, including contracts carried over from an earlier release (at v0.9.4, PostageStamp is still its v0.6.0 deployment). Contracts are labelled with the release they first appeared in. `latest` is the newest release by numeric version order. The release-wide selectors (`latest`, `vX.Y.Z`, `all`) leave out `Token`/`TestToken`, which are synced only when named or given by address. Event selectors (`-e`) narrow the selected contracts to the named events, so `-e Committed` alone covers only the latest Redistribution, and `-c all -e Committed` covers every version.
+
+The RPC endpoint is `--rpc-url`, else `$GNO_RPC_URL` (mainnet) or `$SEP_RPC_URL` (testnet).
 
 ```python
 import ethswarm_chain_sync as ecs

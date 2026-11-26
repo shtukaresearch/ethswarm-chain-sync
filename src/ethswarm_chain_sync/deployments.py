@@ -9,16 +9,31 @@ A :class:`Target` is one deployed contract address. A contract name that was red
 in several releases (``Redistribution``, ``StakeRegistry``, ...) yields one target per
 distinct address; an address carried unchanged across releases (``Token``) yields one.
 
-Selection rules of :func:`resolve_targets`, in one sentence: a contract selector picks
-deployments by name, ``name@version`` or address; an event selector then narrows each
-picked deployment to the events it names (dropping deployments that have none of them);
-with no contract selector, every non-token contract is a candidate.
+Contract selectors understood by :func:`resolve_targets`:
+
+- ``latest`` (the default when none is given): every contract in the newest release's
+  manifest, e.g. ``v0.9.4``;
+- ``vX.Y.Z``: every contract in that release's manifest, including contracts carried over
+  unchanged from an earlier release (at ``v0.9.4`` PostageStamp is still its ``v0.6.0``
+  address);
+- ``all``: every deployment of every contract, across all releases;
+- ``Name``: every deployment of that contract, across all releases;
+- ``Name@vX.Y.Z`` / ``Name@latest``: that contract's deployment as of that release;
+- ``0x…``: the deployment at that address.
+
+The release-wide selectors (``latest``, ``vX.Y.Z``, ``all``) leave out the token contracts
+(``Token``, ``TestToken``), which are synced only when named or given by address. Event
+selectors then narrow each picked deployment to the events they name, dropping
+deployments that declare none of them.
+
+"Newest release" is by numeric version order (``v0.10.0`` > ``v0.9.4``), not string order.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .schema import EventSchema, event_schemas
 
@@ -106,12 +121,60 @@ def all_targets(network: str = "mainnet", manager=None) -> list[Target]:
     return out
 
 
-def _matches(target: Target, selector: str) -> bool:
-    """Whether a contract selector (``name``, ``name@version`` or address) picks ``target``."""
+#: Release-wide selectors. ``latest`` is the default selection.
+LATEST = "latest"
+ALL = "all"
+_VERSION_RE = re.compile(r"^v\d+(\.\d+)*$")
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    """Numeric sort key of a ``vX.Y.Z`` release name."""
+    return tuple(int(part) for part in version[1:].split("."))
+
+
+def latest_version(network: str = "mainnet", manager=None) -> str:
+    """The newest release on ``network``, by numeric version order."""
+    mgr = manager or deployment_manager()
+    return max(mgr.versions(network), key=_version_key)
+
+
+def release_addresses(network: str, version: str, manager) -> dict[str, str]:
+    """``contract name -> lowercase address`` from one release's manifest.
+
+    ``version`` may be ``latest``. Raises :class:`SelectionError` for an unknown release.
+    """
+    if version == LATEST:
+        version = latest_version(network, manager)
+    versions = manager.versions(network)
+    if version not in versions:
+        known = ", ".join(sorted(versions, key=_version_key))
+        raise SelectionError(f"no {network} release {version!r} (known: {known})")
+    return {
+        name: manager.deployment(name, version, network).address.lower()
+        for name in manager.contract_names(version, network)
+    }
+
+
+def _select_contracts(
+    network: str, selector: str, candidates: list[Target], manager
+) -> list[Target]:
+    """The deployments one contract selector picks (grammar in the module docstring)."""
+    if selector == ALL:
+        return [t for t in candidates if t.contract not in TOKEN_CONTRACTS]
+    if selector == LATEST or _VERSION_RE.match(selector):
+        addresses = {
+            a
+            for name, a in release_addresses(network, selector, manager).items()
+            if name not in TOKEN_CONTRACTS
+        }
+        return [t for t in candidates if t.address in addresses]
     if selector.lower().startswith("0x"):
-        return target.address == selector.lower()
+        return [t for t in candidates if t.address == selector.lower()]
     name, _, version = selector.partition("@")
-    return target.contract == name and (not version or target.version == version)
+    if not version:
+        return [t for t in candidates if t.contract == name]
+    address = release_addresses(network, version, manager).get(name)
+    return [t for t in candidates if t.address == address]
 
 
 def _event_keys(target: Target, events: Sequence[str]) -> frozenset[str]:
@@ -129,32 +192,26 @@ def resolve_targets(
     events: Sequence[str] = (),
     manager=None,
 ) -> list[Target]:
-    """Resolve CLI-style selectors into sync targets (rules in the module docstring).
+    """Resolve CLI-style selectors into sync targets (grammar in the module docstring).
 
-    Raises :class:`SelectionError` if a contract selector matches no deployment, if an
-    event selector matches no event of any candidate, or if nothing is left to sync.
+    ``contracts`` defaults to ``["latest"]``. Raises :class:`SelectionError` if a contract
+    selector matches no deployment, if an event selector matches no event of any picked
+    deployment, or if nothing is left to sync.
     """
-    candidates = all_targets(network, manager)
-    if contracts:
-        picked: list[Target] = []
-        for sel in contracts:
-            hits = [t for t in candidates if _matches(t, sel)]
-            if not hits:
-                raise SelectionError(f"no {network} deployment matches {sel!r}")
-            picked.extend(t for t in hits if t not in picked)
-    else:
-        picked = [t for t in candidates if t.contract not in TOKEN_CONTRACTS]
+    mgr = manager or deployment_manager()
+    candidates = all_targets(network, mgr)
+    picked: list[Target] = []
+    for sel in contracts or [LATEST]:
+        hits = _select_contracts(network, sel, candidates, mgr)
+        if not hits:
+            raise SelectionError(f"no {network} deployment matches {sel!r}")
+        picked.extend(t for t in hits if t not in picked)
 
     if events:
         for ev in events:
             if not any(_event_keys(t, [ev]) for t in picked):
                 raise SelectionError(f"no selected contract declares event {ev!r}")
-        narrowed = []
-        for t in picked:
-            keys = _event_keys(t, events)
-            if keys:
-                narrowed.append(Target(**{**t.__dict__, "selected": keys}))
-        picked = narrowed
+        picked = [replace(t, selected=keys) for t in picked if (keys := _event_keys(t, events))]
 
     if not picked:
         raise SelectionError("nothing selected")

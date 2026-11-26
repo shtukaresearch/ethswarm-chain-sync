@@ -113,7 +113,8 @@ def _add_selection(p: argparse.ArgumentParser) -> None:
         "--contract",
         action="append",
         metavar="SEL",
-        help="contract name, name@version, or address (repeatable; default: all non-token)",
+        help="latest (default), vX.Y.Z, all, Name, Name@vX.Y.Z, Name@latest, or 0xaddress "
+        "(repeatable; release-wide selectors exclude token contracts)",
     )
     p.add_argument(
         "-e",
