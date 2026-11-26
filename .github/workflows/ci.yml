@@ -1,0 +1,36 @@
+name: CI
+
+# Lint and the offline test suite, on every PR and every push to main. Also callable
+# from publish.yml so a release cannot be published unless this passes.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # hatch-vcs derives the version from tags
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Lint
+        run: |
+          uvx ruff check src tests
+          uvx ruff format --check src tests
+
+      - name: Test
+        run: uv run --python ${{ matrix.python-version }} pytest -q

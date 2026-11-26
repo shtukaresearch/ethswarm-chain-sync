@@ -1,0 +1,60 @@
+name: Publish to PyPI
+
+# Publishes a release when a numbered version tag (vX.Y.Z) is pushed for a commit on
+# main. The version comes from the tag via hatch-vcs, so tagging a merged commit on main
+# is the act of releasing:
+#
+#   git checkout main && git pull && git tag v0.1.0 && git push origin v0.1.0
+#
+# The publish job is gated on ci.yml, and refuses tags whose commit is not on main.
+# Uses PyPI trusted publishing (OIDC); the workflow filename and the `pypi` environment
+# are part of the trusted-publisher configuration on PyPI.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions: {}
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  publish:
+    name: Build and publish
+    needs: check
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ethswarm-chain-sync/
+    permissions:
+      contents: read
+      id-token: write # OIDC token for PyPI trusted publishing
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the tagged commit to be on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Check built version matches tag
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          ls dist/
+          test -f "dist/ethswarm_chain_sync-${want}.tar.gz" \
+            || { echo "::error::built version does not match tag $GITHUB_REF_NAME"; exit 1; }
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
