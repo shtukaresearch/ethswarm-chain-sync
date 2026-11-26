@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0 # hatch-vcs derives the version from tags
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0 # no floating major tags upstream
 
       - name: Lint
         run: |
